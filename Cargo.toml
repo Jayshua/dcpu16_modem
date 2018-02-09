@@ -1,0 +1,8 @@
+[package]
+name = "space_game"
+version = "0.1.0"
+authors = ["Jayshua Nelson <me@jayshuanelson.com>"]
+
+[dependencies]
+dcpu16_emulator = {path = "../dcpu16_emulator"}
+mio = "0.6.13"
