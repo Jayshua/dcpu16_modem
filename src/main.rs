@@ -15,10 +15,10 @@ const VERTEX_SHADER: &'static str = r#"
 #define HEIGHT 98
 
 in vec3 color;
-out vec3 gs_color;
+out vec3 fs_color;
 
 void main() {
-	gs_color = color;
+	fs_color = color;
 
 	gl_Position = vec4(
 		(float(gl_VertexID % WIDTH) / float(WIDTH) * 2.0) - 1.0,
@@ -79,6 +79,12 @@ struct Pixel {
 }
 implement_vertex!(Pixel, color);
 
+#[derive(Copy, Clone)]
+struct Vertex {
+	position: (f32, f32),
+}
+implement_vertex!(Vertex, position);
+
 struct Lem1802 {
 	// Lem State
 	font: [u16; 256],
@@ -93,6 +99,7 @@ struct Lem1802 {
 	events_loop: glium::glutin::EventsLoop,
 	display: glium::Display,
 	pixel_buffer: glium::VertexBuffer<Pixel>,
+	pixel_shape_buffer: glium::VertexBuffer<Vertex>,
 	indices: glium::index::NoIndices,
 	program: glium::Program,
 	previous_render_instant: time::Instant,
@@ -102,15 +109,15 @@ struct Lem1802 {
 use glium::{glutin, Surface};
 use std::time;
 impl Lem1802 {
-	pub fn interrupt_keyboard(&mut self, dcpu: &mut dcpu::Dcpu) {
-		match dcpu.registers[dcpu::A] {
-			0 => self.keyboard_clear(dcpu),
-			// 1 => self.keyboard_get_next_key(dcpu),
-			// 2 => self.keyboard_is_pressed(dcpu),
-			// 3 => self.keyboard_set_interrupts(dcpu),
-			_ => (),
-		}
-	}
+	// pub fn interrupt_keyboard(&mut self, dcpu: &mut dcpu::Dcpu) {
+	// 	match dcpu.registers[dcpu::A] {
+	// 		0 => self.keyboard_clear(dcpu),
+	// 		// 1 => self.keyboard_get_next_key(dcpu),
+	// 		// 2 => self.keyboard_is_pressed(dcpu),
+	// 		// 3 => self.keyboard_set_interrupts(dcpu),
+	// 		_ => (),
+	// 	}
+	// }
 
 
 	pub fn interrupt_monitor(&mut self, dcpu: &mut dcpu::Dcpu) {
@@ -184,8 +191,20 @@ impl Lem1802 {
 			glium::VertexBuffer::new(&display, &data).unwrap()
 		};
 
-		let indices = glium::index::NoIndices(glium::index::PrimitiveType::Points);
-		let program = glium::Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, Some(GEOMETRY_SHADER)).unwrap();
+		let pixel_shape_buffer = {
+			let pixel_width = (1.0 / (WIDTH as f32) * 2.0);
+			let pixel_height = (1.0 / (HEIGHT as f32) * 2.0);
+			let data: [Vertex; 4] = [
+				Vertex {position: (0.0, 0.0)},
+				Vertex {position: (0.0, -pixel_height)},
+				Vertex {position: (pixel_width, 0.0)},
+				Vertex {position: (pixel_width, -pixel_height)},
+			];
+			glium::VertexBuffer::new(&display, &data).unwrap()
+		};
+
+		let indices = glium::index::NoIndices(glium::index::PrimitiveType::TriangleStrip);
+		let program = glium::Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None).unwrap();
 
 		Lem1802 {
 			events_loop: events_loop,
@@ -224,9 +243,10 @@ impl Lem1802 {
 				0x6C10, 0x6C00, 0x9CA0, 0x7C00, 0x6454, 0x4C00, 0x0836, 0x4100,
 				0x0077, 0x0000, 0x4136, 0x0800, 0x0201, 0x0201, 0x704C, 0x7000,
 			],
-			keyboard_buffer: [0; 64],
+			keyboard_buffer: [0; 62],
 			previous_render_instant: time::Instant::now(),
 			pixel_buffer: pixel_buffer,
+			pixel_shape_buffer: pixel_shape_buffer,
 			indices: indices,
 			program: program,
 			border_color: 7,
@@ -251,53 +271,32 @@ impl Lem1802 {
 			self.previous_render_instant = time::Instant::now();
 		}
 
-		self.events_loop.poll_events(|event| {
-			if let glium::glutin::Event::WindowEvent {event: window_event, ..} = event {
-				match window_event {
-					glium::glutin::WindowEvent::KeyboardInput {input: input} => {
-						use glium::glutin::VirtualKeyCode::*;
-						match input.virtual_keycode {
-							Some(Backspace) => 0x10,
-							Some(Return) => 0x11,
-							Some(Insert) => 0x12,
-							Some(Delete) => 0x13,
-							Some(A) => 0x20,
-							Some(B) => 0x21,
-							Some(C) => 0x22,
-							Some(D) => 0x23,
-							Some(E) => 0x24,
-							Some(F) => 0x25,
-							Some(G) => 0x26,
-							Some(H) => 0x27,
-							Some(I) => 0x28,
-							Some(J) => 0x29,
-							Some(K) => 0x2a,
-							Some(L) => 0x2b,
-							Some(M) => 0x2c,
-							Some(N) => 0x2d,
-							Some(O) => 0x2e,
-							Some(P) => 0x2f,
-							Some(Q) => 0x30,
-							Some(R) => 0x31,
-							Some(S) => 0x32,
-							Some(T) => 0x33,
-							Some(U) => 0x34,
-							Some(V) => 0x35,
-							Some(W) => 0x36,
-							Some(X) => 0x37,
-							Some(Y) => 0x38,
-							Some(Z) => 0x39,
-							Up
-							Down
-							Left
-							Right
-							Shift
-							Control
-						}
-					}
-				}
-			}
-		})
+		// self.events_loop.poll_events(|event| {
+		// 	if let glium::glutin::Event::WindowEvent {event: window_event, ..} = event {
+		// 		match window_event {
+		// 			glium::glutin::WindowEvent::KeyboardInput {input: input} => {
+		// 				use glium::glutin::VirtualKeyCode::*;
+		// 				match input.virtual_keycode {
+		// 					Some(Backspace) => Some(0x10),
+		// 					Some(Return) => Some(0x11),
+		// 					Some(Insert) => Some(0x12),
+		// 					Some(Delete) => Some(0x13),
+		// 					Some(Up) => Some(0x80),
+		// 					Some(Down) => Some(0x81),
+		// 					Some(Left) => Some(0x82),
+		// 					Some(Right) => Some(0x83),
+		// 					Some(Shift) => Some(0x90),
+		// 					Some(Control) => Some(0x91),
+		// 					_ => None,
+		// 				}
+		// 			},
+
+		// 			glium::glutin::WindowEvent::CharacterInput(character) => {
+		// 				Some(character as u8)
+		// 			}
+		// 		}
+		// 	}
+		// })
 	}
 
 
@@ -377,7 +376,7 @@ impl Lem1802 {
 			// Render
 			let mut target = self.display.draw();
 			target.draw(
-				&self.pixel_buffer,
+				(&self.pixel_shape_buffer, self.pixel_buffer.per_instance().unwrap()),
 				&self.indices,
 				&self.program,
 				&glium::uniforms::EmptyUniforms,
