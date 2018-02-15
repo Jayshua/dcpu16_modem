@@ -8,6 +8,33 @@ const WIDTH: u16 = 34;
 const HEIGHT: u16 = 14;
 
 
+const POST_VERTEX_SHADER: &'static str = r#"
+#version 330 core
+
+in vec2 position;
+out vec2 fs_position;
+
+void main() {
+	fs_position = position;
+	gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
+}
+"#;
+
+const POST_FRAGMENT_SHADER: &'static str = r#"
+#version 330 core
+
+in vec2 fs_position;
+out vec4 FragColor;
+
+uniform sampler2D render_texture;
+
+void main() {
+	FragColor = texture(render_texture, fs_position);
+}
+"#;
+
+
+
 const VERTEX_SHADER: &'static str = r#"
 #version 330 core
 
@@ -144,6 +171,10 @@ struct Lem1820 {
 	character_shape_buffer: glium::VertexBuffer<Vertex>,
 	character_shape_indicies: glium::index::NoIndices,
 	shader_program: glium::Program,
+	render_buffer: glium::texture::texture2d::Texture2d,
+	post_process_buffer: glium::VertexBuffer<Vertex>,
+	post_process_indicies: glium::index::NoIndices,
+	post_process_shader: glium::Program,
 }
 
 
@@ -176,6 +207,19 @@ impl Lem1820 {
 
 		let shader_program = glium::Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None).unwrap();
 
+		let render_buffer = glium::texture::texture2d::Texture2d::empty(&display, 640, 480).unwrap();
+
+		let post_process_buffer = glium::VertexBuffer::new(&display, &[
+			Vertex {position: (-1.0, -1.0)},
+			Vertex {position: (1.0, -1.0)},
+			Vertex {position: (-1.0, 1.0)},
+			Vertex {position: (1.0, 1.0)},
+		]).unwrap();
+
+		let post_process_indicies = glium::index::NoIndices(glium::index::PrimitiveType::TriangleStrip);
+
+		let post_process_shader = glium::Program::from_source(&display, POST_VERTEX_SHADER, POST_FRAGMENT_SHADER, None).unwrap();
+
 		Lem1820 {
 			font_ram: DEFAULT_FONT,
 			pallet_ram: DEFAULT_PALLET,
@@ -190,6 +234,10 @@ impl Lem1820 {
 			character_shape_buffer: character_shape_buffer,
 			character_shape_indicies: character_shape_indicies,
 			shader_program: shader_program,
+			render_buffer: render_buffer,
+			post_process_buffer: post_process_buffer,
+			post_process_indicies: post_process_indicies,
+			post_process_shader: post_process_shader,
 		}
 	}
 
@@ -284,8 +332,9 @@ impl Lem1820 {
 
 			self.character_buffer.write(&character_data);
 
-			let mut target = self.display.draw();
-			target.draw(
+			let mut surface = self.render_buffer.as_surface();
+			surface.clear_color(0.0, 0.0, 0.0, 1.0);
+			surface.draw(
 				(&self.character_shape_buffer, self.character_buffer.per_instance().unwrap()),
 				&self.character_shape_indicies,
 				&self.shader_program,
@@ -295,15 +344,64 @@ impl Lem1820 {
 						.magnify_filter(glium::uniforms::MagnifySamplerFilter::Nearest)
 				},
 				&Default::default()
+			);
+
+			let mut target = self.display.draw();
+			target.draw(
+				&self.post_process_buffer,
+				&self.post_process_indicies,
+				&self.post_process_shader,
+				&uniform! {
+					render_texture: glium::uniforms::Sampler::new(&self.render_buffer)
+						.wrap_function(glium::uniforms::SamplerWrapFunction::Clamp),
+				},
+				&Default::default(),
 			).unwrap();
 			target.finish().unwrap();
 		}
 
+		let mut reload_shader = false;
 		self.events_loop.poll_events(|e| {
 			match e {
+				glium::glutin::Event::WindowEvent {event: event, ..} =>
+					match event {
+						glium::glutin::WindowEvent::KeyboardInput {..} => {
+							reload_shader = true;
+						},
+
+						_ => (),
+					},
+
 				_ => ()
 			}
 		});
+
+		if reload_shader {
+			self.reload_shader();
+		}
+	}
+
+	fn reload_shader(&mut self) {
+		use std::io;
+		use std::io::prelude::*;
+		use std::fs::File;
+
+		let mut vertex_shader_file = File::open("vertex.glsl").unwrap();
+		let mut vertex_shader_source = String::new();
+		vertex_shader_file.read_to_string(&mut vertex_shader_source);
+
+		let mut fragment_shader_file = File::open("fragment.glsl").unwrap();
+		let mut fragment_shader_source = String::new();
+		fragment_shader_file.read_to_string(&mut fragment_shader_source);
+
+		match glium::Program::from_source(&self.display, vertex_shader_source.as_str(), fragment_shader_source.as_str(), None) {
+			Ok(program) => {
+				self.post_process_shader = program;
+				println!("Reloaded.");
+			},
+
+			Err(err) => println!("{:?}", err),
+		}
 	}
 }
 
