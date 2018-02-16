@@ -15,12 +15,10 @@ vec2 Distort(vec2 point) {
 }
 
 vec4 scanline(vec4 color, vec2 position) {
-	return color * sin(float(int(position.y * 480) % 4) / 2);
+	return color * sin(float(int(position.y * 480) % 8) / 4);
 }
 
 void main() {
-	// FragColor = texture(render_texture, fs_position);
-	// return;
 	vec2 position = Distort(fs_position.xy * 2.0 - 1.0);
 
 	vec4 pixel = texture(render_texture, position);

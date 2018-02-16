@@ -1,3 +1,5 @@
+use std;
+use dcpu;
 use std::io::prelude::*;
 use std::net::{TcpListener, TcpStream, Ipv4Addr};
 use dcpu::Dcpu;
@@ -11,6 +13,10 @@ const RINGING: u16 = 0x0005;
 const CONNECTION_LOST: u16 = 0x0006;
 const DATA_IN_BUFFER: u16 = 0x0007;
 
+// Byte sent over the network when the user answers an incoming call
+const ANSWER: u8 = 0xaa;
+// Byte sent over the network to an incoming caller when a connection already exists
+const BUSY: u8 = 0xbb;
 
 enum ModemState {
 	Idle,
@@ -20,7 +26,7 @@ enum ModemState {
 	Writing(TcpStream, u16, u16),
 }
 
-struct Modem {
+pub struct Modem {
 	incoming_server: TcpListener,
 	state: ModemState,
 	buffer: Vec<u16>,
@@ -30,9 +36,9 @@ struct Modem {
 
 impl Modem {
 	/// Create a new Modem
-	fn new() -> Modem {
-		let incoming_server = TcpListener::bind("127.0.0.1:6483").unwrap();
-		incoming_server.set_nonblocking(true);
+	pub fn new() -> Modem {
+		let incoming_server = TcpListener::bind("0.0.0.0:6483").unwrap();
+		incoming_server.set_nonblocking(true).unwrap();
 
 		Modem {
 			incoming_server: incoming_server,
@@ -44,7 +50,7 @@ impl Modem {
 	}
 
 	/// Print the state of the modem
-	fn print_state(&self) {
+	pub fn print_state(&self) {
 		match self.state {
 			ModemState::Idle => println!("Idle"),
 			ModemState::Ringing(_) => println!("Ringing"),
@@ -55,7 +61,7 @@ impl Modem {
 	}
 
 	/// Interrupt the modem
-	fn interrupt(&mut self, dcpu: &mut Dcpu) {
+	pub fn interrupt(&mut self, dcpu: &mut Dcpu) {
 		match dcpu.registers[dcpu::A] {
 			0 => self.set_interrupt(dcpu),
 			1 => self.get_status(dcpu),
@@ -96,7 +102,7 @@ impl Modem {
 	fn answer(&mut self, dcpu: &mut Dcpu) {
 		match std::mem::replace(&mut self.state, ModemState::Idle) {
 			ModemState::Ringing(mut socket) => {
-				socket.write(&[0xaa]);
+				socket.write(&[0xaa]).unwrap();
 				self.state = ModemState::Connected(socket);
 			},
 
@@ -125,10 +131,7 @@ impl Modem {
 
 		match TcpStream::connect((Ipv4Addr::new(a, b, c, d), 6482)) {
 			Err(ref e) if e.kind() == std::io::ErrorKind::ConnectionRefused =>
-				if let Some(address) = self.interrupt_address {
-					self.last_interrupt = NO_MODEM;
-					dcpu.interrupt_queue.push(address);
-				},
+				self.interrupt_dcpu(dcpu, NO_MODEM),
 
 			Err(_) =>
 				if let Some(address) = self.interrupt_address {
@@ -137,9 +140,26 @@ impl Modem {
 				},
 
 			Ok(socket) => {
-				socket.set_nonblocking(true);
+				socket.set_nonblocking(true).unwrap();
 				self.state = ModemState::Dialing(socket);
 			},
+		}
+	}
+
+
+	// Interrupt the dcpu with the given message if interrupts are enabled
+	fn interrupt_dcpu(&mut self, dcpu: &mut dcpu::Dcpu, interrupt_type: u16) {
+		if let Some(address) = self.interrupt_address {
+			self.last_interrupt = interrupt_type;
+			dcpu.interrupt_queue.push(address);
+		}
+	}
+
+
+	// Refuse incoming connections on the tcp listener
+	fn refuse_incoming(tcp_listener: &mut TcpListener) {
+		if let Ok((mut socket, addr)) = tcp_listener.accept() {
+			socket.write(&[BUSY]).unwrap();
 		}
 	}
 
@@ -156,42 +176,41 @@ impl Modem {
 				buffer.push((dcpu.memory[(offset + i) as usize]) as u8);
 			}
 
-			socket.write(buffer.as_slice());
+			socket.write(buffer.as_slice()).unwrap();
 		}
 	}
 
 
 	// Step th emodem forward one step
-	fn step(&mut self, dcpu: &mut Dcpu) {
-		match std::mem::replace(&mut self.state, ModemState::Idle) {
+	pub fn step(&mut self, dcpu: &mut Dcpu) {
+		self.state = match std::mem::replace(&mut self.state, ModemState::Idle) {
 			ModemState::Idle =>
 				match self.incoming_server.accept() {
 					Ok((socket, _addr)) => {
-						if let Some(address) = self.interrupt_address {
-							self.last_interrupt = RINGING;
-							dcpu.interrupt_queue.push(address);
-						}
-
-						self.state = ModemState::Ringing(socket);
+						self.interrupt_dcpu(dcpu, RINGING);
+						ModemState::Ringing(socket)
 					},
 
 					Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock =>
-						(),
+						ModemState::Idle,
 
-					Err(e) =>
-						println!("No Client: {:?}", e),
+					Err(e) => {
+						println!("No Client: {:?}", e);
+						ModemState::Idle
+					},
 				},
 
 
 			ModemState::Ringing(mut socket) => {
 				Modem::refuse_incoming(&mut self.incoming_server);
 
+				// Ignore any incoming bytes since the user hasn't answered yet
 				let mut buffer: [u8; 500] = [0; 500];
 				while let Ok(_bytes) = socket.read(&mut buffer) {
-					// Do nothing
+					// Doing nothing in this loop is not a bug. It's a feature.
 				}
 
-				self.state = ModemState::Ringing(socket)
+				ModemState::Ringing(socket)
 			}
 
 
@@ -202,38 +221,26 @@ impl Modem {
 				match socket.read(&mut buffer) {
 					Ok(bytes_read) =>
 						if bytes_read == 0 {
-							self.state = ModemState::Idle;
-
-							if let Some(interrupt) = self.interrupt_address {
-								self.last_interrupt = CONNECTION_LOST;
-								dcpu.interrupt_queue.push(interrupt);
-							}
+							self.interrupt_dcpu(dcpu, CONNECTION_LOST);
+							ModemState::Idle
 						} else {
-							if buffer[0] == 0xaa {
-								self.state = ModemState::Connected(socket);
-
-								if let Some(interrupt) = self.interrupt_address {
-									self.last_interrupt = CONNECTION_MADE;
-									dcpu.interrupt_queue.push(interrupt);
-								}
-							} else if buffer[0] == 0xbb {
-								self.state = ModemState::Idle;
-
-								if let Some(interrupt) = self.interrupt_address {
-									self.last_interrupt = LINE_BUSY;
-									dcpu.interrupt_queue.push(interrupt);
-								}
+							if buffer[0] == ANSWER {
+								self.interrupt_dcpu(dcpu, CONNECTION_MADE);
+								ModemState::Connected(socket)
+							} else if buffer[0] == BUSY {
+								self.interrupt_dcpu(dcpu, LINE_BUSY);
+								ModemState::Idle
 							} else {
-								self.state = ModemState::Dialing(socket);
+								ModemState::Dialing(socket)
 							}
 						},
 
 					Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock =>
-						self.state = ModemState::Dialing(socket),
+						ModemState::Dialing(socket),
 
 					Err(e) => {
 						println!("Error during read during dialing {:?}", e);
-						self.state = ModemState::Idle;
+						ModemState::Idle
 					}
 				}
 			},
@@ -246,20 +253,11 @@ impl Modem {
 				match socket.read(&mut buffer) {
 					Ok(bytes_read) => {
 						if bytes_read == 0 {
-							self.state = ModemState::Idle;
-
-							if let Some(address) = self.interrupt_address {
-								self.last_interrupt = CONNECTION_LOST;
-								dcpu.interrupt_queue.push(address);
-							}
+							self.interrupt_dcpu(dcpu, CONNECTION_LOST);
+							ModemState::Idle
 						} else {
-							self.state = ModemState::Connected(socket);
-
 							if self.buffer.len() == 0 {
-								if let Some(interrupt) = self.interrupt_address {
-									self.last_interrupt = DATA_IN_BUFFER;
-									dcpu.interrupt_queue.push(interrupt);
-								}
+								self.interrupt_dcpu(dcpu, DATA_IN_BUFFER);
 							}
 
 							self.buffer.append(
@@ -273,14 +271,18 @@ impl Modem {
 										})
 									.collect::<Vec<_>>()
 							);
+
+							ModemState::Connected(socket)
 						}
 					},
 
 					Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock =>
-						self.state = ModemState::Connected(socket),
+						ModemState::Connected(socket),
 
-					Err(e) =>
-						println!("Unable to read: {:?}", e),
+					Err(e) => {
+						println!("Unable to read: {:?}", e);
+						ModemState::Idle
+					}
 				}
 			},
 
@@ -297,30 +299,20 @@ impl Modem {
 					}
 				}
 
-				self.state =
-					match socket.write(&packet) {
-						Ok(_bytes_written) =>
-							if current_location + 5 > end_location {
-								ModemState::Connected(socket)
-							} else {
-								ModemState::Writing(socket, current_location + 5, end_location)
-							},
+				match socket.write(&packet) {
+					Ok(_bytes_written) =>
+						if current_location + 5 > end_location {
+							ModemState::Connected(socket)
+						} else {
+							ModemState::Writing(socket, current_location + 5, end_location)
+						},
 
-						Err(e) => {
-							println!("Error writing: {:?}", e);
-							ModemState::Idle
-						}
+					Err(e) => {
+						println!("Error writing: {:?}", e);
+						ModemState::Idle
 					}
+				}
 			},
-		}
-	}
-
-
-
-	// Refuse incoming connections on the tcp listener
-	fn refuse_incoming(tcp_listener: &mut TcpListener) {
-		if let Ok((mut socket, addr)) = tcp_listener.accept() {
-			socket.write(&[0xbb]);
 		}
 	}
 }
