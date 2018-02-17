@@ -6,5 +6,6 @@ authors = ["Jayshua Nelson <me@jayshuanelson.com>"]
 [dependencies]
 dcpu16_emulator = {path = "../dcpu16_emulator"}
 glium = "*"
-glutin = "0.12.0"
-rand = "0.4.2"
+docopt = "0.8"
+serde = "1.0"
+serde_derive = "1.0"

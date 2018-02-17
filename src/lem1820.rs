@@ -104,7 +104,7 @@ impl Lem1820 {
 		use glium::Surface;
 
 		if self.video_ram != 0 {
-			let mut character_data: Vec<Character> = Vec::new();
+			let mut character_data: Vec<Character> = Vec::with_capacity(500);
 			let border_character = Character {
 				character: 0,
 				foreground: to_float_color(&self.pallet_ram, self.border_color as usize),
@@ -171,19 +171,23 @@ impl Lem1820 {
 				&Default::default(),
 			).unwrap();
 			target.finish().unwrap();
+		} else {
+			let mut target = self.display.draw();
+			target.clear_color(0.0, 0.0, 0.0, 1.0);
+			target.finish().unwrap();
 		}
 
 		let mut reload_shader = false;
 		self.events_loop.poll_events(|e| {
 			match e {
-				glium::glutin::Event::WindowEvent {event, ..} =>
-					match event {
-						glium::glutin::WindowEvent::KeyboardInput {..} => {
-							reload_shader = true;
-						},
+				// glium::glutin::Event::WindowEvent {event, ..} =>
+					// match event {
+					// 	glium::glutin::WindowEvent::KeyboardInput {..} => {
+					// 		reload_shader = true;
+					// 	},
 
-						_ => (),
-					},
+					// 	_ => (),
+					// },
 
 				_ => ()
 			}

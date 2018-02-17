@@ -1,0 +1,17 @@
+set a 0
+set b :data
+hwi 0
+
+
+set i, :data
+:loop
+set a [i]
+bor a 0xf000
+set [i], a
+add i 1
+set pc, :loop
+;abcx7zijthat's strange
+
+
+:data
+dat "Hello World!"
