@@ -1,17 +1,38 @@
-set a 0
-set b :data
+set i, :data
+
+; Set the LEM video memory location
+set a, 0
+set b, :data
 hwi 0
 
-
-set i, :data
+; Loop reading input from the keyboard and writing to the screen
 :loop
-set a [i]
-bor a 0xf000
-set [i], a
-add i 1
+set a, 1
+hwi 1
+ifn c, 0
+	set pc, :print
 set pc, :loop
-;abcx7zijthat's strange
 
+:print
+ife c, 0x10
+	set pc, :back_space
+ife c, 0x20
+	set pc, :print_space
+ife c, 0x90
+	set pc, :loop
+bor c, 0xf000 ; Make character white on black
+set [i], c    ; Write character to video memory
+add i, 1      ; Increment the video memory pointer
+set pc, :loop
+
+:back_space
+sub i, 1
+set [i], 0x0000
+set pc, :loop
+
+:print_space
+add i, 1
+set pc, :loop
 
 :data
-dat "Hello World!"
+dat 0x0000

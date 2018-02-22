@@ -245,9 +245,9 @@ impl Dcpu {
                   0x0a => value_b & value_a,
                   0x0b => value_b | value_a,
                   0x0c => value_b ^ value_a,
-                  0x0d => value_b >> value_a,
-                  0x0e => ((value_b as i16) >> value_a) as u16,
-                  0x0f => value_b << value_a,
+                  0x0d => value_b.wrapping_shr(value_a as u32),
+                  0x0e => ((value_b as i16).wrapping_shr(value_a as u32)) as u16,
+                  0x0f => value_b.wrapping_shl(value_a as u32),
                   0x1a => value_b.wrapping_add(value_a).wrapping_add(excess),
                   0x1b => value_b.wrapping_sub(value_a).wrapping_add(excess),
                   0x1e => value_a,
@@ -296,7 +296,13 @@ impl Dcpu {
 
       // Decrement a cycle for this step, and increment the program counter
       if instruction != 0x0 {
-         self.cycle_accumulator -= 1;
+         // If the instruction just executed was not actually valid, it was
+         // probably given a 0 cost, which means that no cost was actually
+         // added to the cycle accumulator. To prevent an exception, check
+         // to ensure there are actually cycles to remove.
+         if self.cycle_accumulator > 0 {
+            self.cycle_accumulator -= 1;
+         }
          self.cycle_count += 1;
       }
    }

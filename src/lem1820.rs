@@ -1,5 +1,6 @@
 use glium;
 use dcpu;
+use std;
 
 pub struct Lem1820 {
 	// Dcpu State
@@ -9,10 +10,10 @@ pub struct Lem1820 {
 	border_color: u16,
 
 	// Window State
-	events_loop: glium::glutin::EventsLoop,
 	display: glium::Display,
 
 	// OpenGL State
+	last_refresh: std::time::Instant,
 	font_texture: glium::texture::texture2d::Texture2d,
 	character_buffer: glium::VertexBuffer<Character>,
 	character_shape_buffer: glium::VertexBuffer<Vertex>,
@@ -28,14 +29,13 @@ pub struct Lem1820 {
 
 
 impl Lem1820 {
-	pub fn new() -> Lem1820 {
+	pub fn new() -> (Lem1820, glium::glutin::EventsLoop) {
 		// Create window and OpenGL Context
-		let mut events_loop = glium::glutin::EventsLoop::new();
+		let events_loop = glium::glutin::EventsLoop::new();
 		let window = glium::glutin::WindowBuilder::new()
 			.with_dimensions(640, 480)
 			.with_title("LEM 1802 - Low Energy Monitor - Nya Elektriska");
-		let context = glium::glutin::ContextBuilder::new()
-			.with_vsync(true);
+		let context = glium::glutin::ContextBuilder::new();
 		let display = glium::Display::new(window, context, &events_loop).unwrap();
 
 
@@ -67,15 +67,15 @@ impl Lem1820 {
 
 		let post_process_shader = load_shader(&display).unwrap();
 
-		Lem1820 {
+		(Lem1820 {
 			font_ram: DEFAULT_FONT,
 			pallet_ram: DEFAULT_PALLET,
 			video_ram: 0,
 			border_color: 7,
 
-			events_loop: events_loop,
 			display: display,
 
+			last_refresh: std::time::Instant::now(),
 			font_texture: font_texture,
 			character_buffer: character_buffer,
 			character_shape_buffer: character_shape_buffer,
@@ -85,7 +85,7 @@ impl Lem1820 {
 			post_process_buffer: post_process_buffer,
 			post_process_indicies: post_process_indicies,
 			post_process_shader: post_process_shader,
-		}
+		}, events_loop)
 	}
 
 	pub fn interrupt(&mut self, dcpu: &mut dcpu::Dcpu) {
@@ -102,6 +102,10 @@ impl Lem1820 {
 
 	pub fn step(&mut self, dcpu: &mut dcpu::Dcpu) {
 		use glium::Surface;
+
+		if let None = self.last_refresh.elapsed().checked_sub(std::time::Duration::new(0, 10_000_000)) {
+			return;
+		}
 
 		if self.video_ram != 0 {
 			let mut character_data: Vec<Character> = Vec::with_capacity(500);
@@ -121,7 +125,7 @@ impl Lem1820 {
 				character_data.push(border_character);
 
 				for x in 0..WIDTH - 2 {
-					let character_index = (self.video_ram + x + (y * WIDTH)) as usize;
+					let character_index = (self.video_ram + x + (y * (WIDTH - 2))) as usize;
 					let character_value = dcpu.memory[character_index];
 					let character = (character_value & 0b0000_0000_0111_1111) as u8;
 					let foreground = (character_value & 0b1111_0000_0000_0000) >> 12;
@@ -175,28 +179,6 @@ impl Lem1820 {
 			let mut target = self.display.draw();
 			target.clear_color(0.0, 0.0, 0.0, 1.0);
 			target.finish().unwrap();
-		}
-
-		let mut reload_shader = false;
-		self.events_loop.poll_events(|e| {
-			match e {
-				// glium::glutin::Event::WindowEvent {event, ..} =>
-					// match event {
-					// 	glium::glutin::WindowEvent::KeyboardInput {..} => {
-					// 		reload_shader = true;
-					// 	},
-
-					// 	_ => (),
-					// },
-
-				_ => ()
-			}
-		});
-
-		if reload_shader {
-			if let Some(new_shader) = load_shader(&self.display) {
-				self.post_process_shader = new_shader;
-			}
 		}
 	}
 
